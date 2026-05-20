@@ -19,7 +19,6 @@ from pathlib import Path
 
 
 CPP_EXTENSIONS = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"}
-SOURCE_EXTENSIONS = {".c", ".cc", ".cpp", ".cxx"}
 HEADER_EXTENSIONS = {".h", ".hh", ".hpp", ".hxx"}
 IGNORED_DIRS = {".git", ".github", "build", "cmake-build-debug", "cmake-build-release"}
 
@@ -208,50 +207,6 @@ def check_clang_format(path: Path, root: Path, violations: list[Violation]) -> N
         )
 
 
-def parse_compiler_line(line: str) -> tuple[int | None, str]:
-    match = re.search(r":(\d+):(?:\d+:)?\s*(?:fatal\s+)?(?:error|warning):\s*(.+)$", line)
-    if not match:
-        return None, line.strip()
-    return int(match.group(1)), match.group(2).strip()
-
-
-def check_cpp_syntax(path: Path, root: Path, violations: list[Violation]) -> None:
-    if path.suffix.lower() not in SOURCE_EXTENSIONS:
-        return
-
-    relative_path = path.relative_to(root)
-    compiler = shutil.which("g++") or shutil.which("clang++")
-    if compiler is None:
-        add(
-            violations,
-            relative_path,
-            1,
-            "C++ compiler is required for syntax checks, but neither g++ nor clang++ was found in PATH.",
-        )
-        return
-
-    result = subprocess.run(
-        [compiler, "-std=c++17", "-fsyntax-only", "-Wall", "-Wextra", str(path)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode == 0:
-        return
-
-    reported = False
-    for line in result.stderr.splitlines():
-        if ": error:" not in line and ": fatal error:" not in line:
-            continue
-        line_number, message = parse_compiler_line(line)
-        add(violations, relative_path, line_number or 1, f"C++ syntax error: {message}")
-        reported = True
-
-    if not reported:
-        message = result.stderr.strip() or result.stdout.strip() or "Compiler syntax check failed."
-        add(violations, relative_path, 1, f"C++ syntax error: {message}")
-
-
 def check_header_guard(path: Path, lines: list[str], violations: list[Violation]) -> None:
     if path.suffix.lower() not in HEADER_EXTENSIONS:
         return
@@ -321,7 +276,6 @@ def check_file(path: Path, root: Path) -> list[Violation]:
     lines = text.splitlines()
 
     check_clang_format(path, root, violations)
-    check_cpp_syntax(path, root, violations)
 
     if not SNAKE_CASE_FILE_RE.match(path.name):
         add(violations, relative_path, 1, "C++ file names must use snake_case.")

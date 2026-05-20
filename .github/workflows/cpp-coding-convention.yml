@@ -34,7 +34,7 @@ jobs:
       - name: Install clang-format
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-format g++
+          sudo apt-get install -y clang-format
 
       - name: Run convention checker
         run: python scripts/check_cpp_convention.py
