@@ -72,7 +72,7 @@ void openFile()
     FILE *fp = fopen("data.txt", "r");
     if (fp == nullptr)
     {
-        printf("fail");
+        printf("fail")
     }
 }
 
