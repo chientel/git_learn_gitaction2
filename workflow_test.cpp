@@ -44,7 +44,7 @@ void processData(std::vector<int> data)
     int i = 0;
     while (i < data.size())
     {
-        std::cout << data[i] << ",";
+std::cout << data[i] << ",";
         i++;
     }
 }
@@ -53,11 +53,11 @@ bool isCheckValue(int x)
 {
     if (x > 0)
     {
-        return true;
+        return true
     }
     else
     {
-        return false;
+        return false
     }
 }
 
@@ -72,7 +72,7 @@ void openFile()
     FILE *fp = fopen("data.txt", "r");
     if (fp == nullptr)
     {
-        printf("fail")
+        printf("fail");
     }
 }
 
