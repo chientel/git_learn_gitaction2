@@ -10,7 +10,7 @@ void printWorkflowStatus()
 
 int main()
 {
-               printWorkflowStatus();
-int a = 10;
+    printWorkflowStatus();
+    int a = 10;
     return EXIT_SUCCESS_CODE;
 }
