@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+from difflib import SequenceMatcher
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -89,6 +90,70 @@ def add(violations: list[Violation], path: Path, line_number: int, message: str)
     violations.append(Violation(path=path, line=line_number, message=message))
 
 
+def normalize_cpp_tokens(lines: list[str]) -> str:
+    return re.sub(r"\s+", "", "".join(strip_line_comment(line) for line in lines))
+
+
+def is_short_inline_function_style_difference(original: list[str], formatted: list[str]) -> bool:
+    original_non_empty = [line for line in original if line.strip()]
+    formatted_non_empty = [line for line in formatted if line.strip()]
+    if not original_non_empty or not formatted_non_empty:
+        return False
+
+    one_side_is_single_line = len(original_non_empty) == 1 or len(formatted_non_empty) == 1
+    other_side_is_multi_line = len(original_non_empty) > 1 or len(formatted_non_empty) > 1
+    if not one_side_is_single_line or not other_side_is_multi_line:
+        return False
+
+    original_text = "\n".join(original_non_empty)
+    formatted_text = "\n".join(formatted_non_empty)
+    if "{" not in original_text or "}" not in original_text or "{" not in formatted_text or "}" not in formatted_text:
+        return False
+
+    if original_text.count("{") != formatted_text.count("{") or original_text.count("}") != formatted_text.count("}"):
+        return False
+
+    original_indent = re.match(r"\s*", original_non_empty[0]).group(0)
+    formatted_indent = re.match(r"\s*", formatted_non_empty[0]).group(0)
+    if original_indent != formatted_indent:
+        return False
+
+    return normalize_cpp_tokens(original_non_empty) == normalize_cpp_tokens(formatted_non_empty)
+
+
+def report_format_difference(
+    violations: list[Violation],
+    path: Path,
+    start_line: int,
+    original: list[str],
+    formatted: list[str],
+) -> None:
+    if is_short_inline_function_style_difference(original, formatted):
+        return
+
+    max_lines = max(len(original), len(formatted))
+    for offset in range(max_lines):
+        line_number = start_line + offset
+        current_line = original[offset] if offset < len(original) else "<missing line>"
+        expected_line = formatted[offset] if offset < len(formatted) else "<extra line should be removed>"
+        if current_line == expected_line:
+            continue
+        if "\t" in current_line:
+            add(
+                violations,
+                path,
+                line_number,
+                "Formatting differs from .clang-format: tab found; expected spaces only.",
+            )
+            continue
+        add(
+            violations,
+            path,
+            line_number,
+            f"Formatting differs from .clang-format. Expected: {expected_line!r}",
+        )
+
+
 def check_clang_format(path: Path, root: Path, violations: list[Violation]) -> None:
     relative_path = path.relative_to(root)
     clang_format = shutil.which("clang-format")
@@ -115,26 +180,17 @@ def check_clang_format(path: Path, root: Path, violations: list[Violation]) -> N
     original_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     formatted_lines = result.stdout.splitlines()
 
-    max_lines = max(len(original_lines), len(formatted_lines))
-    for index in range(max_lines):
-        original = original_lines[index] if index < len(original_lines) else "<missing line>"
-        formatted = formatted_lines[index] if index < len(formatted_lines) else "<extra line should be removed>"
-        if original != formatted:
-            line_number = index + 1
-            if "\t" in original:
-                add(
-                    violations,
-                    relative_path,
-                    line_number,
-                    "Formatting differs from .clang-format: tab found; expected spaces only.",
-                )
-            else:
-                add(
-                    violations,
-                    relative_path,
-                    line_number,
-                    f"Formatting differs from .clang-format. Expected: {formatted!r}",
-                )
+    matcher = SequenceMatcher(None, original_lines, formatted_lines, autojunk=False)
+    for tag, original_start, original_end, formatted_start, formatted_end in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        report_format_difference(
+            violations,
+            relative_path,
+            original_start + 1,
+            original_lines[original_start:original_end],
+            formatted_lines[formatted_start:formatted_end],
+        )
 
 
 def check_header_guard(path: Path, lines: list[str], violations: list[Violation]) -> None:
