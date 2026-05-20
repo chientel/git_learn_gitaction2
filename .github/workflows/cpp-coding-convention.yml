@@ -36,5 +36,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang-format
 
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "tree-sitter>=0.25,<0.26" "tree-sitter-cpp>=0.23,<0.24"
+
       - name: Run convention checker
         run: python scripts/check_cpp_convention.py

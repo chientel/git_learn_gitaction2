@@ -14,7 +14,19 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from pathlib import Path
+
+try:
+    from tree_sitter import Language, Parser
+    import tree_sitter_cpp
+except ImportError as error:
+    Language = None
+    Parser = None
+    tree_sitter_cpp = None
+    TREE_SITTER_IMPORT_ERROR = str(error)
+else:
+    TREE_SITTER_IMPORT_ERROR = ""
 
 
 CPP_EXTENSIONS = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"}
@@ -40,8 +52,10 @@ MACRO_RE = re.compile(r"^\s*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)\b")
 TYPEDEF_RE = re.compile(r"\btypedef\b")
 USING_NAMESPACE_STD_RE = re.compile(r"\busing\s+namespace\s+std\s*;")
 NULL_RE = re.compile(r"\bNULL\b")
-IF_FOR_WHILE_WITHOUT_BRACE_RE = re.compile(r"^\s*(?:if|for|while)\s*\(.+\)\s*(?!\{|;)\S+")
 MAGIC_NUMBER_RE = re.compile(r"(?<![\w.])(?!(?:0|1|2)\b)\d+(?:\.\d+)?(?:f)?\b")
+POINTER_STYLE_RE = re.compile(
+    r"(?:\b[A-Za-z_][\w:<>]*\s+\*+\s*[A-Za-z_][\w]*|\b[A-Za-z_][\w:<>]*\s*\*+\s+[A-Za-z_][\w]*|\([A-Za-z_][\w:<>]*\s+\*\))"
+)
 
 
 @dataclass(frozen=True)
@@ -89,6 +103,160 @@ def add(violations: list[Violation], path: Path, line_number: int, message: str)
     violations.append(Violation(path=path, line=line_number, message=message))
 
 
+def point_to_line(point: object) -> int:
+    row = getattr(point, "row", None)
+    if row is not None:
+        return int(row) + 1
+    return int(point[0]) + 1
+
+
+def build_cpp_parser() -> tuple[object | None, str]:
+    if TREE_SITTER_IMPORT_ERROR:
+        return None, f"tree-sitter-cpp is required for syntax parsing: {TREE_SITTER_IMPORT_ERROR}"
+
+    try:
+        raw_language = tree_sitter_cpp.language()
+        language = raw_language if isinstance(raw_language, Language) else Language(raw_language)
+
+        try:
+            parser = Parser(language)
+        except TypeError:
+            parser = Parser()
+            if hasattr(parser, "set_language"):
+                parser.set_language(language)
+            else:
+                parser.language = language
+    except Exception as error:
+        return None, f"Failed to initialize tree-sitter-cpp parser: {error}"
+
+    return parser, ""
+
+
+def node_text(source: bytes, node: object) -> str:
+    start_byte = getattr(node, "start_byte", 0)
+    end_byte = getattr(node, "end_byte", start_byte)
+    text = source[start_byte:end_byte].decode("utf-8", errors="replace").strip()
+    if not text:
+        return "<empty>"
+    return re.sub(r"\s+", " ", text)[:80]
+
+
+def walk_tree_sitter_errors(source: bytes, node: object, errors: list[tuple[int, str]]) -> None:
+    node_type = getattr(node, "type", "")
+    is_missing = bool(getattr(node, "is_missing", False))
+
+    if is_missing:
+        errors.append((point_to_line(node.start_point), f"C++ syntax parse error: missing token '{node_type}'."))
+        return
+
+    if node_type == "ERROR":
+        errors.append(
+            (
+                point_to_line(node.start_point),
+                f"C++ syntax parse error near {node_text(source, node)!r}.",
+            )
+        )
+        return
+
+    for child in getattr(node, "children", []):
+        walk_tree_sitter_errors(source, child, errors)
+
+
+def check_tree_sitter_syntax(path: Path, root: Path, violations: list[Violation]) -> None:
+    relative_path = path.relative_to(root)
+    parser, error = build_cpp_parser()
+    if parser is None:
+        add(violations, relative_path, 1, error)
+        return
+
+    source = path.read_bytes()
+    tree = parser.parse(source)
+    root_node = tree.root_node
+    if not getattr(root_node, "has_error", False):
+        return
+
+    parse_errors: list[tuple[int, str]] = []
+    walk_tree_sitter_errors(source, root_node, parse_errors)
+    for line_number, message in parse_errors:
+        add(violations, relative_path, line_number, message)
+
+
+def normalize_cpp_tokens(lines: list[str]) -> str:
+    return re.sub(r"\s+", "", "".join(strip_line_comment(line) for line in lines))
+
+
+def is_short_inline_function_style_difference(original: list[str], formatted: list[str]) -> bool:
+    original_non_empty = [line for line in original if line.strip()]
+    formatted_non_empty = [line for line in formatted if line.strip()]
+    if not original_non_empty or not formatted_non_empty:
+        return False
+
+    one_side_is_single_line = len(original_non_empty) == 1 or len(formatted_non_empty) == 1
+    other_side_is_multi_line = len(original_non_empty) > 1 or len(formatted_non_empty) > 1
+    if not one_side_is_single_line or not other_side_is_multi_line:
+        return False
+
+    original_text = "\n".join(original_non_empty)
+    formatted_text = "\n".join(formatted_non_empty)
+    if "{" not in original_text or "}" not in original_text or "{" not in formatted_text or "}" not in formatted_text:
+        return False
+
+    if original_text.count("{") != formatted_text.count("{") or original_text.count("}") != formatted_text.count("}"):
+        return False
+
+    original_indent = re.match(r"\s*", original_non_empty[0]).group(0)
+    formatted_indent = re.match(r"\s*", formatted_non_empty[0]).group(0)
+    if original_indent != formatted_indent:
+        return False
+
+    return normalize_cpp_tokens(original_non_empty) == normalize_cpp_tokens(formatted_non_empty)
+
+
+def is_pointer_style_difference(original: list[str], formatted: list[str]) -> bool:
+    if len(original) != 1 or len(formatted) != 1:
+        return False
+    original_line = strip_line_comment(original[0])
+    formatted_line = strip_line_comment(formatted[0])
+    if not POINTER_STYLE_RE.search(original_line) and not POINTER_STYLE_RE.search(formatted_line):
+        return False
+    return normalize_cpp_tokens([original_line]) == normalize_cpp_tokens([formatted_line])
+
+
+def report_format_difference(
+    violations: list[Violation],
+    path: Path,
+    start_line: int,
+    original: list[str],
+    formatted: list[str],
+) -> None:
+    if is_short_inline_function_style_difference(original, formatted):
+        return
+    if is_pointer_style_difference(original, formatted):
+        return
+
+    max_lines = max(len(original), len(formatted))
+    for offset in range(max_lines):
+        line_number = start_line + offset
+        current_line = original[offset] if offset < len(original) else "<missing line>"
+        expected_line = formatted[offset] if offset < len(formatted) else "<extra line should be removed>"
+        if current_line == expected_line:
+            continue
+        if "\t" in current_line:
+            add(
+                violations,
+                path,
+                line_number,
+                "Formatting differs from .clang-format: tab found; expected spaces only.",
+            )
+            continue
+        add(
+            violations,
+            path,
+            line_number,
+            f"Formatting differs from .clang-format. Expected: {expected_line!r}",
+        )
+
+
 def check_clang_format(path: Path, root: Path, violations: list[Violation]) -> None:
     relative_path = path.relative_to(root)
     clang_format = shutil.which("clang-format")
@@ -115,26 +283,17 @@ def check_clang_format(path: Path, root: Path, violations: list[Violation]) -> N
     original_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     formatted_lines = result.stdout.splitlines()
 
-    max_lines = max(len(original_lines), len(formatted_lines))
-    for index in range(max_lines):
-        original = original_lines[index] if index < len(original_lines) else "<missing line>"
-        formatted = formatted_lines[index] if index < len(formatted_lines) else "<extra line should be removed>"
-        if original != formatted:
-            line_number = index + 1
-            if "\t" in original:
-                add(
-                    violations,
-                    relative_path,
-                    line_number,
-                    "Formatting differs from .clang-format: tab found; expected spaces only.",
-                )
-            else:
-                add(
-                    violations,
-                    relative_path,
-                    line_number,
-                    f"Formatting differs from .clang-format. Expected: {formatted!r}",
-                )
+    matcher = SequenceMatcher(None, original_lines, formatted_lines, autojunk=False)
+    for tag, original_start, original_end, formatted_start, formatted_end in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        report_format_difference(
+            violations,
+            relative_path,
+            original_start + 1,
+            original_lines[original_start:original_end],
+            formatted_lines[formatted_start:formatted_end],
+        )
 
 
 def check_header_guard(path: Path, lines: list[str], violations: list[Violation]) -> None:
@@ -175,6 +334,64 @@ def check_switch_default(path: Path, lines: list[str], violations: list[Violatio
                 in_switch = False
 
 
+def check_control_statement_braces(path: Path, lines: list[str], violations: list[Violation]) -> None:
+    for line_number, raw_line in enumerate(lines, start=1):
+        code = strip_line_comment(raw_line)
+        if not re.match(r"^\s*(?:if|for|while)\s*\(.+\)", code):
+            continue
+        stripped = code.strip()
+        if stripped.endswith(";") or "{" in stripped:
+            continue
+
+        next_code = ""
+        for next_line in lines[line_number:]:
+            next_code = strip_line_comment(next_line).strip()
+            if next_code:
+                break
+
+        if next_code != "{":
+            add(
+                violations,
+                path,
+                line_number,
+                "Always use braces for if, for, and while statements; put '{' on the same line or the next non-empty line.",
+            )
+
+
+def check_block_indentation(path: Path, lines: list[str], violations: list[Violation]) -> None:
+    brace_depth = 0
+    for line_number, raw_line in enumerate(lines, start=1):
+        code = strip_line_comment(raw_line)
+        stripped = code.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith("//"):
+            continue
+
+        leading_spaces = len(raw_line) - len(raw_line.lstrip(" "))
+        if "\t" in raw_line[: len(raw_line) - len(raw_line.lstrip())]:
+            add(violations, path, line_number, "Indentation uses tab; expected spaces only.")
+            continue
+
+        line_depth = brace_depth
+        if stripped.startswith("}"):
+            line_depth = max(0, line_depth - 1)
+        if re.match(r"^(?:public|protected|private)\s*:", stripped):
+            line_depth = max(0, line_depth - 1)
+        if re.match(r"^(?:case\b.*|default)\s*:", stripped):
+            line_depth = max(0, line_depth - 1)
+
+        expected_spaces = line_depth * 4
+        if leading_spaces != expected_spaces:
+            add(
+                violations,
+                path,
+                line_number,
+                f"Indentation is {leading_spaces} spaces; expected {expected_spaces} spaces for block depth {line_depth}.",
+            )
+
+        brace_depth += code.count("{") - code.count("}")
+        brace_depth = max(0, brace_depth)
+
+
 def check_file(path: Path, root: Path) -> list[Violation]:
     violations: list[Violation] = []
     relative_path = path.relative_to(root)
@@ -182,12 +399,16 @@ def check_file(path: Path, root: Path) -> list[Violation]:
     lines = text.splitlines()
 
     check_clang_format(path, root, violations)
+    check_tree_sitter_syntax(path, root, violations)
 
     if not SNAKE_CASE_FILE_RE.match(path.name):
         add(violations, relative_path, 1, "C++ file names must use snake_case.")
 
     check_header_guard(relative_path, lines, violations)
     check_switch_default(relative_path, lines, violations)
+    check_control_statement_braces(relative_path, lines, violations)
+    check_block_indentation(relative_path, lines, violations)
+    class_names = {match.group(1) for line in lines for match in CLASS_RE.finditer(strip_line_comment(line))}
 
     for line_number, raw_line in enumerate(lines, start=1):
         code = strip_line_comment(raw_line)
@@ -241,11 +462,14 @@ def check_file(path: Path, root: Path) -> list[Violation]:
         function_match = FUNCTION_RE.match(code)
         if function_match:
             name = function_match.group(1)
-            if name not in {"main"} and "::" not in name and not name.startswith("operator") and not CAMEL_CASE_RE.match(name):
+            if (
+                name not in {"main"}
+                and name not in class_names
+                and "::" not in name
+                and not name.startswith("operator")
+                and not CAMEL_CASE_RE.match(name)
+            ):
                 add(violations, relative_path, line_number, f"Function '{name}' must use camelCase.")
-
-        if IF_FOR_WHILE_WITHOUT_BRACE_RE.match(code):
-            add(violations, relative_path, line_number, "Always use braces for if, for, and while statements.")
 
         if not is_comment_or_preprocessor(code):
             statement_count = stripped.count(";")
