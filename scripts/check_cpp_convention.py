@@ -358,6 +358,40 @@ def check_control_statement_braces(path: Path, lines: list[str], violations: lis
             )
 
 
+def check_block_indentation(path: Path, lines: list[str], violations: list[Violation]) -> None:
+    brace_depth = 0
+    for line_number, raw_line in enumerate(lines, start=1):
+        code = strip_line_comment(raw_line)
+        stripped = code.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith("//"):
+            continue
+
+        leading_spaces = len(raw_line) - len(raw_line.lstrip(" "))
+        if "\t" in raw_line[: len(raw_line) - len(raw_line.lstrip())]:
+            add(violations, path, line_number, "Indentation uses tab; expected spaces only.")
+            continue
+
+        line_depth = brace_depth
+        if stripped.startswith("}"):
+            line_depth = max(0, line_depth - 1)
+        if re.match(r"^(?:public|protected|private)\s*:", stripped):
+            line_depth = max(0, line_depth - 1)
+        if re.match(r"^(?:case\b.*|default)\s*:", stripped):
+            line_depth = max(0, line_depth - 1)
+
+        expected_spaces = line_depth * 4
+        if leading_spaces != expected_spaces:
+            add(
+                violations,
+                path,
+                line_number,
+                f"Indentation is {leading_spaces} spaces; expected {expected_spaces} spaces for block depth {line_depth}.",
+            )
+
+        brace_depth += code.count("{") - code.count("}")
+        brace_depth = max(0, brace_depth)
+
+
 def check_file(path: Path, root: Path) -> list[Violation]:
     violations: list[Violation] = []
     relative_path = path.relative_to(root)
@@ -373,6 +407,7 @@ def check_file(path: Path, root: Path) -> list[Violation]:
     check_header_guard(relative_path, lines, violations)
     check_switch_default(relative_path, lines, violations)
     check_control_statement_braces(relative_path, lines, violations)
+    check_block_indentation(relative_path, lines, violations)
     class_names = {match.group(1) for line in lines for match in CLASS_RE.finditer(strip_line_comment(line))}
 
     for line_number, raw_line in enumerate(lines, start=1):
