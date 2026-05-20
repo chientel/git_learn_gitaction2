@@ -1,7 +1,7 @@
 #include <iostream>
 
 constexpr int EXIT_SUCCESS_CODE = 0;
-
+#define ooi 9
 void printWorkflowStatus()
 {
     const char* MESSAGE = "GitHub Actions workflow test";
@@ -10,6 +10,7 @@ void printWorkflowStatus()
 
 int main()
 {
-    printWorkflowStatus();
+               printWorkflowStatus();
+int a = 10;
     return EXIT_SUCCESS_CODE;
 }
