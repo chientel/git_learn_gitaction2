@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -87,6 +89,54 @@ def add(violations: list[Violation], path: Path, line_number: int, message: str)
     violations.append(Violation(path=path, line=line_number, message=message))
 
 
+def check_clang_format(path: Path, root: Path, violations: list[Violation]) -> None:
+    relative_path = path.relative_to(root)
+    clang_format = shutil.which("clang-format")
+    if clang_format is None:
+        add(
+            violations,
+            relative_path,
+            1,
+            "clang-format is required to check .clang-format compliance, but it was not found in PATH.",
+        )
+        return
+
+    result = subprocess.run(
+        [clang_format, "--style=file", str(path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        message = result.stderr.strip() or result.stdout.strip() or "clang-format failed."
+        add(violations, relative_path, 1, f"clang-format error: {message}")
+        return
+
+    original_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    formatted_lines = result.stdout.splitlines()
+
+    max_lines = max(len(original_lines), len(formatted_lines))
+    for index in range(max_lines):
+        original = original_lines[index] if index < len(original_lines) else "<missing line>"
+        formatted = formatted_lines[index] if index < len(formatted_lines) else "<extra line should be removed>"
+        if original != formatted:
+            line_number = index + 1
+            if "\t" in original:
+                add(
+                    violations,
+                    relative_path,
+                    line_number,
+                    "Formatting differs from .clang-format: tab found; expected spaces only.",
+                )
+            else:
+                add(
+                    violations,
+                    relative_path,
+                    line_number,
+                    f"Formatting differs from .clang-format. Expected: {formatted!r}",
+                )
+
+
 def check_header_guard(path: Path, lines: list[str], violations: list[Violation]) -> None:
     if path.suffix.lower() not in HEADER_EXTENSIONS:
         return
@@ -130,6 +180,8 @@ def check_file(path: Path, root: Path) -> list[Violation]:
     relative_path = path.relative_to(root)
     text = path.read_text(encoding="utf-8", errors="replace")
     lines = text.splitlines()
+
+    check_clang_format(path, root, violations)
 
     if not SNAKE_CASE_FILE_RE.match(path.name):
         add(violations, relative_path, 1, "C++ file names must use snake_case.")

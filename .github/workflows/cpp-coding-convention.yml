@@ -13,6 +13,7 @@ on:
       - "**/*.hh"
       - "**/*.hpp"
       - "**/*.hxx"
+      - ".clang-format"
       - ".github/workflows/cpp-coding-convention.yml"
       - "scripts/check_cpp_convention.py"
 
@@ -29,6 +30,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
 
       - name: Run convention checker
         run: python scripts/check_cpp_convention.py
