@@ -142,10 +142,10 @@ def check_file(path: Path, root: Path) -> list[Violation]:
         stripped = code.strip()
 
         if "\t" in raw_line:
-            add(violations, relative_path, line_number, "Use 4 spaces for indentation; tabs are not allowed.")
+            add(violations, relative_path, line_number, "Tab indentation found; use 4 spaces instead.")
 
         if "NULL" in code and NULL_RE.search(code):
-            add(violations, relative_path, line_number, "Use nullptr instead of NULL.")
+            add(violations, relative_path, line_number, "NULL found; use nullptr instead.")
 
         if TYPEDEF_RE.search(code):
             add(violations, relative_path, line_number, "Use using instead of typedef.")
@@ -155,15 +155,18 @@ def check_file(path: Path, root: Path) -> list[Violation]:
 
         macro_match = MACRO_RE.search(code)
         if macro_match and not UPPER_CASE_RE.match(macro_match.group(1)):
-            add(violations, relative_path, line_number, "Macro names must use UPPER_CASE.")
+            macro_name = macro_match.group(1)
+            add(violations, relative_path, line_number, f"Macro '{macro_name}' must use UPPER_CASE.")
 
         enum_match = ENUM_RE.search(code)
         if enum_match:
-            add(violations, relative_path, line_number, "Use enum class instead of plain enum.")
+            enum_name = enum_match.group(1) or "<anonymous>"
+            add(violations, relative_path, line_number, f"Enum '{enum_name}' must use enum class instead of plain enum.")
 
         class_match = CLASS_RE.search(code)
         if class_match and not PASCAL_CASE_RE.match(class_match.group(1)):
-            add(violations, relative_path, line_number, "Class and struct names must use PascalCase.")
+            class_name = class_match.group(1)
+            add(violations, relative_path, line_number, f"Class/struct '{class_name}' must use PascalCase.")
 
         for const_match in CONST_RE.finditer(code):
             const_name = const_match.group(1)
@@ -172,17 +175,22 @@ def check_file(path: Path, root: Path) -> list[Violation]:
             if next_char in {",", ")"}:
                 continue
             if const_name not in {"auto"} and not UPPER_CASE_RE.match(const_name):
-                add(violations, relative_path, line_number, "Constants must use UPPER_CASE.")
+                add(violations, relative_path, line_number, f"Constant '{const_name}' must use UPPER_CASE.")
 
         for bool_name in BOOL_RE.findall(code):
             if not BOOL_PREFIX_RE.match(bool_name):
-                add(violations, relative_path, line_number, "Boolean variables must start with is, has, can, or should.")
+                add(
+                    violations,
+                    relative_path,
+                    line_number,
+                    f"Boolean variable '{bool_name}' must start with is, has, can, or should.",
+                )
 
         function_match = FUNCTION_RE.match(code)
         if function_match:
             name = function_match.group(1)
             if name not in {"main"} and "::" not in name and not name.startswith("operator") and not CAMEL_CASE_RE.match(name):
-                add(violations, relative_path, line_number, "Function names must use camelCase.")
+                add(violations, relative_path, line_number, f"Function '{name}' must use camelCase.")
 
         if IF_FOR_WHILE_WITHOUT_BRACE_RE.match(code):
             add(violations, relative_path, line_number, "Always use braces for if, for, and while statements.")
@@ -192,14 +200,25 @@ def check_file(path: Path, root: Path) -> list[Violation]:
             if statement_count > 1:
                 add(violations, relative_path, line_number, "Use one statement per line.")
 
-            if MAGIC_NUMBER_RE.search(code) and not re.search(r"\b(?:const|constexpr|case)\b", code):
-                add(violations, relative_path, line_number, "Avoid magic numbers; use named constants.")
+            magic_number_match = MAGIC_NUMBER_RE.search(code)
+            if magic_number_match and not re.search(r"\b(?:const|constexpr|case)\b", code):
+                add(
+                    violations,
+                    relative_path,
+                    line_number,
+                    f"Magic number '{magic_number_match.group(0)}' found; use a named constant.",
+                )
 
         member_match = re.search(r"^\s*(?:static\s+)?(?:[\w:<>,~*&]+\s+)+([A-Za-z_][A-Za-z0-9_]*)\s*(?:[=;{])", code)
         if member_match and re.match(r"\s*(?:private|protected|public)\s*:", code) is None:
             name = member_match.group(1)
             if (name.startswith("m_") or name.startswith("s_")) and not MEMBER_RE.match(name):
-                add(violations, relative_path, line_number, "Member variables should use m_ or s_ followed by camelCase.")
+                add(
+                    violations,
+                    relative_path,
+                    line_number,
+                    f"Member variable '{name}' should use m_ or s_ followed by camelCase.",
+                )
 
     return violations
 
