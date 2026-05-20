@@ -1,0 +1,34 @@
+name: C++ Coding Convention
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "**/*.c"
+      - "**/*.cc"
+      - "**/*.cpp"
+      - "**/*.cxx"
+      - "**/*.h"
+      - "**/*.hh"
+      - "**/*.hpp"
+      - "**/*.hxx"
+      - ".github/workflows/cpp-coding-convention.yml"
+      - "scripts/check_cpp_convention.py"
+
+jobs:
+  convention:
+    name: Check C++ coding convention
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run convention checker
+        run: python scripts/check_cpp_convention.py
