@@ -13,9 +13,20 @@ import re
 import shutil
 import subprocess
 import sys
-from difflib import SequenceMatcher
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from pathlib import Path
+
+try:
+    from tree_sitter import Language, Parser
+    import tree_sitter_cpp
+except ImportError as error:
+    Language = None
+    Parser = None
+    tree_sitter_cpp = None
+    TREE_SITTER_IMPORT_ERROR = str(error)
+else:
+    TREE_SITTER_IMPORT_ERROR = ""
 
 
 CPP_EXTENSIONS = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"}
@@ -90,6 +101,84 @@ def is_comment_or_preprocessor(line: str) -> bool:
 
 def add(violations: list[Violation], path: Path, line_number: int, message: str) -> None:
     violations.append(Violation(path=path, line=line_number, message=message))
+
+
+def point_to_line(point: object) -> int:
+    row = getattr(point, "row", None)
+    if row is not None:
+        return int(row) + 1
+    return int(point[0]) + 1
+
+
+def build_cpp_parser() -> tuple[object | None, str]:
+    if TREE_SITTER_IMPORT_ERROR:
+        return None, f"tree-sitter-cpp is required for syntax parsing: {TREE_SITTER_IMPORT_ERROR}"
+
+    try:
+        raw_language = tree_sitter_cpp.language()
+        language = raw_language if isinstance(raw_language, Language) else Language(raw_language)
+
+        try:
+            parser = Parser(language)
+        except TypeError:
+            parser = Parser()
+            if hasattr(parser, "set_language"):
+                parser.set_language(language)
+            else:
+                parser.language = language
+    except Exception as error:
+        return None, f"Failed to initialize tree-sitter-cpp parser: {error}"
+
+    return parser, ""
+
+
+def node_text(source: bytes, node: object) -> str:
+    start_byte = getattr(node, "start_byte", 0)
+    end_byte = getattr(node, "end_byte", start_byte)
+    text = source[start_byte:end_byte].decode("utf-8", errors="replace").strip()
+    if not text:
+        return "<empty>"
+    return re.sub(r"\s+", " ", text)[:80]
+
+
+def walk_tree_sitter_errors(source: bytes, node: object, errors: list[tuple[int, str]]) -> None:
+    node_type = getattr(node, "type", "")
+    is_missing = bool(getattr(node, "is_missing", False))
+
+    if is_missing:
+        errors.append((point_to_line(node.start_point), f"C++ syntax parse error: missing token '{node_type}'."))
+        return
+
+    if node_type == "ERROR":
+        errors.append(
+            (
+                point_to_line(node.start_point),
+                f"C++ syntax parse error near {node_text(source, node)!r}.",
+            )
+        )
+        return
+
+    for child in getattr(node, "children", []):
+        walk_tree_sitter_errors(source, child, errors)
+
+
+def check_tree_sitter_syntax(path: Path, root: Path, violations: list[Violation]) -> None:
+    relative_path = path.relative_to(root)
+    parser, error = build_cpp_parser()
+    if parser is None:
+        add(violations, relative_path, 1, error)
+        return
+
+    source = path.read_bytes()
+    tree = parser.parse(source)
+    root_node = tree.root_node
+    if not getattr(root_node, "has_error", False):
+        return
+
+    parse_errors: list[tuple[int, str]] = []
+    walk_tree_sitter_errors(source, root_node, parse_errors)
+    for line_number, message in parse_errors:
+        add(violations, relative_path, line_number, message)
 
 
 def normalize_cpp_tokens(lines: list[str]) -> str:
@@ -276,6 +365,7 @@ def check_file(path: Path, root: Path) -> list[Violation]:
     lines = text.splitlines()
 
     check_clang_format(path, root, violations)
+    check_tree_sitter_syntax(path, root, violations)
 
     if not SNAKE_CASE_FILE_RE.match(path.name):
         add(violations, relative_path, 1, "C++ file names must use snake_case.")
