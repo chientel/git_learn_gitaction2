@@ -1,117 +1,165 @@
-#include<iostream>
-#include<vector>
-#include<string>
-using namespace std;
+#include <iostream>
+#include <string>
+#include <vector>
 
-#define pi 3.14
+#define PI 3.14
 #define MAX_COUNT 100
+#define TEN 10
+#define TWENTY 20
+#define THIRTY_SEVEN 37
+#define AGE_VALUE 22
+#define BUFFER_SIZE 100
+#define ZERO 0
+#define FIVE 5
+#define FOUR 4
+#define THREE 3
+#define TWO 2
+#define ONE 1
 
-int globalvalue=0;
+int globalValue = 0;
 
-class student{
+class Student
+{
 public:
-student(string name,int age):m_name(name),m_age(age){}
-void print(){cout<<"Name:"<<m_name<<endl;}
+    Student(std::string name, int age) : m_name(name), m_age(age) {}
+    void print()
+    {
+        std::cout << "Name:" << m_name << std::endl;
+    }
 
 private:
-string m_name;
-int m_age;
+    std::string m_name;
+    int m_age;
 };
 
-enum Color{
-RED,
-GREEN,
-BLUE
+enum class Color
+{
+    RED,
+    GREEN,
+    BLUE
 };
 
-void ProcessData(vector<int> data){
-for(int i=0;i<data.size();i++){
-cout<<data[i]<<",";
-}
-}
-
-bool checkvalue(int x){ if(x>0) return true; else return false; }
-
-int Calculate(int a,int b){
-int result=a+b;
-return result;
+void processData(std::vector<int> data)
+{
+    int i = 0;
+    while (i < data.size())
+    {
+        std::cout << data[i] << ",";
+        i++;
+    }
 }
 
-void openfile(){
-FILE *fp=fopen("data.txt","r");
-if(fp==NULL){
-printf("fail");
-}
+bool isCheckValue(int x)
+{
+    if (x > 0)
+    {
+        return true;
+    }
+    else
+    {
+        return false;
+    }
 }
 
-class NetworkManager{
+int calculate(int a, int b)
+{
+    int result = a + b;
+    return result;
+}
+
+void openFile()
+{
+    FILE *fp = fopen("data.txt", "r");
+    if (fp == nullptr)
+    {
+        printf("fail");
+    }
+}
+
+class NetworkManager
+{
 public:
-void connect();
+    void connect();
+
 private:
-int timeout;
+    int timeout;
 };
 
-void NetworkManager::connect(){
-cout<<"connecting"<<endl;
+void NetworkManager::connect()
+{
+    std::cout << "connecting" << std::endl;
 }
 
-int main(){
+int main()
+{
+    int a = TEN;
+    int b = TWENTY;
+    int sum = a + b;
 
-int a=10;
-int b=20;
-int sum=a+b;
+    int *ptr = nullptr;
 
-int* ptr = NULL;
+    std::vector<int> numbers = {ONE, TWO, THREE, FOUR, FIVE};
 
-vector<int>numbers={1,2,3,4,5};
+    if (sum > TEN)
+    {
+        std::cout << "large" << std::endl;
+    }
 
-if(sum>10){
-cout<<"large"<<endl;
-}
+    if (sum < MAX_COUNT)
+    {
+        std::cout << "small" << std::endl;
+    }
 
-if(sum<100) cout<<"small"<<endl;
+    for (auto item : numbers)
+    {
+        std::cout << item << std::endl;
+    }
 
-for(auto item:numbers){
-cout<<item<<endl;
-}
+    switch (sum)
+    {
+    case 1:
+        std::cout << "one";
+        break;
+    case 2:
+        std::cout << "two";
+        break;
+    default:
+        break;
+    }
 
-switch(sum){
-case 1:
-cout<<"one";
-break;
-case 2:
-cout<<"two";
-break;
-}
+    Student s("chien", AGE_VALUE);
+    s.print();
 
-student s("chien",22);
-s.print();
+    bool isFlag = false;
 
-bool flag=false;
+    if (isFlag == true)
+    {
+        std::cout << "flag";
+    }
 
-if(flag==true){
-cout<<"flag";
-}
+    char *buffer = (char *)malloc(BUFFER_SIZE);
 
-char* buffer=(char*)malloc(100);
+    memset(buffer, ZERO, BUFFER_SIZE);
 
-memset(buffer,0,100);
+    free(buffer);
 
-free(buffer);
+    int temperature = THIRTY_SEVEN;
 
-int temperature = 37;
+    if (temperature > THIRTY_SEVEN)
+    {
+        std::cout << "fever";
+    }
 
-if(temperature>37){
-cout<<"fever";
-}
+    std::vector<std::string> names;
+    names.push_back("A");
+    names.push_back("B");
 
-vector<string> names;
-names.push_back("A");
-names.push_back("B");
+    int j = 0;
+    while (j < names.size())
+    {
+        std::cout << names[j] << std::endl;
+        j++;
+    }
 
-for(int i=0;i<names.size();i++){
-cout<<names[i]<<endl;
-}
-
-return 0;
+    return 0;
 }
