@@ -41,8 +41,10 @@ MACRO_RE = re.compile(r"^\s*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)\b")
 TYPEDEF_RE = re.compile(r"\btypedef\b")
 USING_NAMESPACE_STD_RE = re.compile(r"\busing\s+namespace\s+std\s*;")
 NULL_RE = re.compile(r"\bNULL\b")
-IF_FOR_WHILE_WITHOUT_BRACE_RE = re.compile(r"^\s*(?:if|for|while)\s*\(.+\)\s*(?!\{|;)\S+")
 MAGIC_NUMBER_RE = re.compile(r"(?<![\w.])(?!(?:0|1|2)\b)\d+(?:\.\d+)?(?:f)?\b")
+POINTER_STYLE_RE = re.compile(
+    r"(?:\b[A-Za-z_][\w:<>]*\s+\*+\s*[A-Za-z_][\w]*|\b[A-Za-z_][\w:<>]*\s*\*+\s+[A-Za-z_][\w]*|\([A-Za-z_][\w:<>]*\s+\*\))"
+)
 
 
 @dataclass(frozen=True)
@@ -121,6 +123,16 @@ def is_short_inline_function_style_difference(original: list[str], formatted: li
     return normalize_cpp_tokens(original_non_empty) == normalize_cpp_tokens(formatted_non_empty)
 
 
+def is_pointer_style_difference(original: list[str], formatted: list[str]) -> bool:
+    if len(original) != 1 or len(formatted) != 1:
+        return False
+    original_line = strip_line_comment(original[0])
+    formatted_line = strip_line_comment(formatted[0])
+    if not POINTER_STYLE_RE.search(original_line) and not POINTER_STYLE_RE.search(formatted_line):
+        return False
+    return normalize_cpp_tokens([original_line]) == normalize_cpp_tokens([formatted_line])
+
+
 def report_format_difference(
     violations: list[Violation],
     path: Path,
@@ -129,6 +141,8 @@ def report_format_difference(
     formatted: list[str],
 ) -> None:
     if is_short_inline_function_style_difference(original, formatted):
+        return
+    if is_pointer_style_difference(original, formatted):
         return
 
     max_lines = max(len(original), len(formatted))
@@ -231,6 +245,30 @@ def check_switch_default(path: Path, lines: list[str], violations: list[Violatio
                 in_switch = False
 
 
+def check_control_statement_braces(path: Path, lines: list[str], violations: list[Violation]) -> None:
+    for line_number, raw_line in enumerate(lines, start=1):
+        code = strip_line_comment(raw_line)
+        if not re.match(r"^\s*(?:if|for|while)\s*\(.+\)", code):
+            continue
+        stripped = code.strip()
+        if stripped.endswith(";") or "{" in stripped:
+            continue
+
+        next_code = ""
+        for next_line in lines[line_number:]:
+            next_code = strip_line_comment(next_line).strip()
+            if next_code:
+                break
+
+        if next_code != "{":
+            add(
+                violations,
+                path,
+                line_number,
+                "Always use braces for if, for, and while statements; put '{' on the same line or the next non-empty line.",
+            )
+
+
 def check_file(path: Path, root: Path) -> list[Violation]:
     violations: list[Violation] = []
     relative_path = path.relative_to(root)
@@ -244,6 +282,8 @@ def check_file(path: Path, root: Path) -> list[Violation]:
 
     check_header_guard(relative_path, lines, violations)
     check_switch_default(relative_path, lines, violations)
+    check_control_statement_braces(relative_path, lines, violations)
+    class_names = {match.group(1) for line in lines for match in CLASS_RE.finditer(strip_line_comment(line))}
 
     for line_number, raw_line in enumerate(lines, start=1):
         code = strip_line_comment(raw_line)
@@ -297,11 +337,14 @@ def check_file(path: Path, root: Path) -> list[Violation]:
         function_match = FUNCTION_RE.match(code)
         if function_match:
             name = function_match.group(1)
-            if name not in {"main"} and "::" not in name and not name.startswith("operator") and not CAMEL_CASE_RE.match(name):
+            if (
+                name not in {"main"}
+                and name not in class_names
+                and "::" not in name
+                and not name.startswith("operator")
+                and not CAMEL_CASE_RE.match(name)
+            ):
                 add(violations, relative_path, line_number, f"Function '{name}' must use camelCase.")
-
-        if IF_FOR_WHILE_WITHOUT_BRACE_RE.match(code):
-            add(violations, relative_path, line_number, "Always use braces for if, for, and while statements.")
 
         if not is_comment_or_preprocessor(code):
             statement_count = stripped.count(";")
